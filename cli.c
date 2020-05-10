@@ -42,10 +42,25 @@ static int _argc;
 static char **_argv;
 
 static int
+mbim_signal_response(void *buffer, int len)
+{
+	struct mbim_basic_connect_signal_state_r *caps = (struct mbim_basic_connect_signal_state_r *) buffer;
+
+	if (len < sizeof(struct mbim_basic_connect_signal_state_r)) {
+		fprintf(stderr, "message not long enough\n");
+		return -1;
+	}
+
+	printf("  rssi: %d\n", le32toh(caps->rssi));
+
+	return 0;
+}
+
+static int
 mbim_device_caps_response(void *buffer, int len)
 {
 	struct mbim_basic_connect_device_caps_r *caps = (struct mbim_basic_connect_device_caps_r *) buffer;
-	char *deviceid, *firmwareinfo, *hardwareinfo;
+	char *deviceid, *firmwareinfo, *hardwareinfo, *customclass;
 
 	if (len < sizeof(struct mbim_basic_connect_device_caps_r)) {
 		fprintf(stderr, "message not long enough\n");
@@ -55,6 +70,7 @@ mbim_device_caps_response(void *buffer, int len)
 	deviceid = mbim_get_string(&caps->deviceid, buffer);
 	firmwareinfo = mbim_get_string(&caps->firmwareinfo, buffer);
 	hardwareinfo = mbim_get_string(&caps->hardwareinfo, buffer);
+	customclass = mbim_get_string(&caps->customdataclass, buffer);
 
 	printf("  devicetype: %04X - %s\n", le32toh(caps->devicetype),
 		mbim_enum_string(mbim_device_type_values, le32toh(caps->devicetype)));
@@ -69,6 +85,7 @@ mbim_device_caps_response(void *buffer, int len)
 	printf("  deviceid: %s\n", deviceid);
 	printf("  firmwareinfo: %s\n", firmwareinfo);
 	printf("  hardwareinfo: %s\n", hardwareinfo);
+	printf("  customdataclass: %s\n", customclass);
 
 	return 0;
 }
@@ -179,6 +196,7 @@ mbim_attach_response(void *buffer, int len)
 		mbim_enum_string(mbim_packet_service_state_values, le32toh(ps->packetservicestate)));
 	printf("  uplinkspeed: %"PRIu64"\n", (uint64_t) le64toh(ps->uplinkspeed));
 	printf("  downlinkspeed: %"PRIu64"\n", (uint64_t) le64toh(ps->downlinkspeed));
+	printf("  highestavailabledataclass: %04X\n", le32toh(ps->highestavailabledataclass));
 
 	if (MBIM_PACKET_SERVICE_STATE_ATTACHED == le32toh(ps->packetservicestate))
 		return 0;
@@ -395,6 +413,27 @@ mbim_disconnect_request(void)
 	return mbim_send_command_msg();
 }
 
+static int
+mbim_signal_request(void)
+{
+	mbim_setup_command_msg(basic_connect, MBIM_MESSAGE_COMMAND_TYPE_QUERY, MBIM_CMD_BASIC_CONNECT_SIGNAL_STATE, 0);
+
+	return mbim_send_command_msg();
+}
+
+static int
+mbim_status_request(void)
+{
+	struct mbim_basic_connect_connect_q *c =
+		(struct mbim_basic_connect_connect_q *) mbim_setup_command_msg(basic_connect,
+			MBIM_MESSAGE_COMMAND_TYPE_QUERY, MBIM_CMD_BASIC_CONNECT_CONNECT,
+			sizeof(struct mbim_basic_connect_connect_q));
+
+	memcpy(c->contexttype, uuid_context_type_internet, 16);
+
+	return mbim_send_command_msg();
+}
+
 static char*
 mbim_pin_sanitize(char *pin)
 {
@@ -477,12 +516,14 @@ static struct mbim_handler handlers[] = {
 	{ "disconnect", 0, mbim_disconnect_request, mbim_connect_response },
 	{ "config", 0, mbim_config_request, mbim_config_response },
 	{ "radio", 0, mbim_radio_request, mbim_radio_response },
+	{ "signal", 0, mbim_signal_request, mbim_signal_response },
+	{ "status", 0, mbim_status_request, mbim_connect_response },
 };
 
 static int
 usage(void)
 {
-	fprintf(stderr, "Usage: umbim <caps|pinstate|unlock|registration|subscriber|attach|detach|connect|disconnect|config|radio> [options]\n"
+	fprintf(stderr, "Usage: umbim <caps|pinstate|unlock|registration|subscriber|attach|detach|connect|disconnect|config|radio|signal|status> [options]\n"
 		"Options:\n"
 		"    -d <device>	the device (/dev/cdc-wdmX)\n"
 		"    -t <transaction>	the transaction id\n"
